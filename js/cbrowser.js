@@ -229,10 +229,11 @@ Browser.prototype.realInit = function() {
     this.locSingleBase = makeElement('span', 'foo', {className: 'loc-single-base'});
     var locSingleBaseHolder = makeElement('div', this.locSingleBase,{className: 'loc-single-base-holder'}); 
     // Add listener to update single base location
-    this.addViewListener(function(chr, min, max) {
+    this.addViewListener(function(chr, minFloor, maxFloor, zoomSliderValue, zoomSliderDict, min, max) {
         // Just setting textContent causes layout flickering in Blink.
-        // This approach means that the element is never empty.
-        self.locSingleBase.appendChild(document.createTextNode(chr + ':' + formatLongInt((max + min)/2 + 1)));
+        // This approach means that the element is never empty.');
+        var loc = Math.round((max + min) / 2);
+        self.locSingleBase.appendChild(document.createTextNode(chr + ':' + formatLongInt(loc)));
         self.locSingleBase.removeChild(self.locSingleBase.firstChild);
     });
 
@@ -1322,6 +1323,8 @@ Browser.prototype.refresh = function() {
 
     if (!this.knownSpace || this.knownSpace.chr !== this.chr) {
         var ss = this.getSequenceSource();
+        if (this.knownSpace)
+            this.knownSpace.cancel();
         this.knownSpace = new KnownSpace(this.tiers, this.chr, outerDrawnStart, outerDrawnEnd, scaledQuantRes, ss);
     }
     
@@ -1490,7 +1493,7 @@ Browser.prototype.resizeViewer = function(skipRefresh) {
 
     if (oldFPW != this.featurePanelWidth) {
         this.zoomMax = this.zoomExpt * Math.log(this.maxViewWidth / this.zoomBase);
-        this.zoomMin = this.zoomExpt * Math.log(this.featurePanelWidth / 10 / this.zoomBase);
+        this.zoomMin = this.zoomExpt * Math.log(this.featurePanelWidth / 10 / this.zoomBase);   // FIXME hard-coded minimum.
         this.zoomSliderValue = this.zoomExpt * Math.log((this.viewEnd - this.viewStart + 1) / this.zoomBase);
 
         var viewWidth = this.viewEnd - this.viewStart;
@@ -1872,7 +1875,9 @@ Browser.prototype.notifyLocation = function() {
                  alternate: (this.savedZoom+this.zoomMin) || this.zoomMin,
                  isSnapZooming: this.isSnapZooming,
                  min: this.zoomMin, 
-                 max: this.zoomMax});
+                 max: this.zoomMax},
+                 this.viewStart,
+                 this.viewEnd);
         } catch (ex) {
             console.log(ex.stack);
         }

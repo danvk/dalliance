@@ -235,8 +235,30 @@
   background-color: blue;
   position: absolute;
   z-index: 900;
-  top: 0px;
+  top: 15px;
   /* left set by code... */
+}
+
+*.dalliance .single-base-guideline {
+  position: absolute;
+  background-color: rgba(0, 0, 0, 0.25);
+  z-index: 899;
+  height: 100%;
+  top: 15px;
+  border: 1px solid rgba(0, 0, 0, 0.75);
+  /* left and width set by code... */
+}
+
+*.dalliance .loc-single-base {
+  position: relative;
+  font-size: 11px;
+}
+
+*.dalliance .loc-single-base-holder {
+  display: inline-block;
+  margin-top: -4px;
+  flex-shrink: 0;
+  -webkit-flex-shrink: 0;
 }
 
 *.dalliance .powered-by {
@@ -255,6 +277,7 @@
 *.dalliance .toolbar {
   flex: none;
   -webkit-flex: none;
+  margin-bottom: 5px;
 }
 
 *.dalliance .toolbar > * {
@@ -320,6 +343,7 @@
   border: 0px;
   top: 0px;
   display: none;
+  pointer-events: none;
 }
 
 *.dalliance .tier-edit input {
@@ -399,15 +423,34 @@
     top: 0px;
     margin-left: 4px;
     margin-right: 4px;
-    margin: 7px;
+    margin-top: 3px;
 }
 
 *.dalliance .slider hr.slider-thumb {
     border: 1.5px solid #888888;
-    width: 12px; height: 12px;
+    width: 10px; height: 10px;
     border-radius: 50%;
     position: absolute;
-    margin-top: 3px;
+    margin-top: 0px;
     left: 50px;
     background-color: #dddddd;
+    margin-left: 1px;
+}
+
+*.dalliance .slider hr.slider-thumb.active {
+  background-color: #bbbbee;
+  z-index: 20;
+  width: 12px; height: 12px;
+  margin-left: 0px;
+  margin-top: -1px;
+}
+
+*.dalliance .slider div.slider-label {
+  top: 9px;
+  font-size: 7pt;
+  display: block;
+  position: absolute;
+  width: 50px;
+  text-align: center;
+  margin-left: -21px;
 }

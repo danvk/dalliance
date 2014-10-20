@@ -68,10 +68,9 @@ Browser.prototype.initUI = function(holder, genomePanel) {
     b.makeTooltip(locField, 'Enter a genomic location or gene name');
     var locStatusField = makeElement('p', '', {className: 'loc-status'});
 
-
     var zoomInBtn = makeElement('a', [makeElement('i', null, {className: 'fa fa-search-plus'})], {className: 'btn'});
-    // var zoomSlider = makeElement('input', '', {type: 'range', min: 100, max: 250}, {className: 'zoom-slider'}, {width: '150px'});  // NB min and max get overwritten.
     var zoomSlider = new makeZoomSlider();
+    b.makeTooltip(zoomSlider, "Highlighted button shows current zoom level, gray button shows inactive zoom level (click or tap SPACE to toggle).")
 
 
     var zoomOutBtn = makeElement('a', [makeElement('i', null, {className: 'fa fa-search-minus'})], {className: 'btn'});
@@ -136,7 +135,6 @@ Browser.prototype.initUI = function(holder, genomePanel) {
                                                 zoomOutBtn], {className: 'btn-group'}));
     }
     
-
     if (this.toolbarBelow) {
         holder.appendChild(genomePanel);
         holder.appendChild(toolbar);
@@ -145,11 +143,58 @@ Browser.prototype.initUI = function(holder, genomePanel) {
         holder.appendChild(genomePanel);
     }
 
+
+    var lt2 = Math.log10(2);
+    var lt5 = Math.log10(5);
+    var roundSliderValue = function(x) {
+        var ltx = (x / b.zoomExpt + Math.log(b.zoomBase)) / Math.log(10);
+        
+        var whole = ltx|0
+        var frac = ltx - whole;
+        var rounded
+
+        if (frac < 0.01)
+            rounded = whole;
+        else if (frac <= (lt2 + 0.01))
+            rounded = whole + lt2;
+        else if (frac <= (lt5 + 0.01))
+            rounded = whole + lt5;
+        else {
+            rounded = whole + 1;
+        }
+
+        return (rounded * Math.log(10) -Math.log(b.zoomBase)) * b.zoomExpt;
+    }
+
+    var markSlider = function(x) {
+        zoomSlider.addLabel(x, humanReadableScale(Math.exp(x / b.zoomExpt) * b.zoomBase));
+    }
+
     this.addViewListener(function(chr, min, max, _oldZoom, zoom) {
         locField.value = (chr + ':' + formatLongInt(min) + '..' + formatLongInt(max));
         zoomSlider.min = zoom.min|0;
         zoomSlider.max = zoom.max|0;
-        zoomSlider.value = zoom.current|0;
+        if (zoom.isSnapZooming) {
+            zoomSlider.value = zoom.alternate
+            zoomSlider.value2 = zoom.current;
+            zoomSlider.active = 2;
+        } else {
+            zoomSlider.value = zoom.current;
+            zoomSlider.value2 = zoom.alternate;
+            zoomSlider.active = 1;
+        }
+
+        zoomSlider.removeLabels();
+        var zmin = zoom.min;
+        var zmax = zoom.max;
+        var zrange = zmax - zmin;
+
+        
+        markSlider(roundSliderValue(zmin));
+        markSlider(roundSliderValue(zmin + (1.0*zrange/3.0)));
+        markSlider(roundSliderValue(zmin + (2.0*zrange/3.0)));
+        markSlider(roundSliderValue(zmax));
+
         if (b.storeStatus) {
             b.storeViewStatus();
         }
@@ -211,8 +256,15 @@ Browser.prototype.initUI = function(holder, genomePanel) {
     b.makeTooltip(zoomOutBtn, 'Zoom out (-)');
 
     zoomSlider.addEventListener('change', function(ev) {
-    	b.zoomSliderValue = (1.0 * zoomSlider.value);
-    	b.zoom(Math.exp((1.0 * zoomSlider.value) / b.zoomExpt));
+        var wantSnap = zoomSlider.active == 2;
+        if (wantSnap != b.isSnapZooming) {
+            b.savedZoom = b.zoomSliderValue  - b.zoomMin;
+            b.isSnapZooming = wantSnap;
+        }
+        var activeZSV = zoomSlider.active == 1 ? zoomSlider.value : zoomSlider.value2;
+
+    	b.zoomSliderValue = (1.0 * activeZSV);
+    	b.zoom(Math.exp((1.0 * activeZSV) / b.zoomExpt));
     }, false);
 
     favBtn.addEventListener('click', function(ev) {
@@ -458,7 +510,16 @@ Browser.prototype.toggleOptsPopup = function(ev) {
             b.storeStatus();
         }, false);
         optsTable.appendChild(makeElement('tr', [makeElement('td', 'Vertical guideline', {align: 'right'}), makeElement('td', rulerSelect)]));
-
+        
+        var singleBaseHighlightButton = makeElement('input', '', {type: 'checkbox', checked: b.singleBaseHighlight}); 
+        singleBaseHighlightButton.addEventListener('change', function(ev) {
+            b.singleBaseHighlight = singleBaseHighlightButton.checked;
+            b.positionRuler();
+            b.storeStatus();
+        }, false);
+        singleBaseHighlightButton.setAttribute('id','singleBaseHightlightButton'); // making this because access is required when the key 'u' is pressed and the options are visible
+        optsTable.appendChild(makeElement('tr', [makeElement('td', 'Display and highlight current genome location', {align: 'right'}), makeElement('td', singleBaseHighlightButton)]));
+        
         optsForm.appendChild(optsTable);
 
         var resetButton = makeElement('button', 'Reset browser', {className: 'btn'}, {marginLeft: 'auto', marginRight: 'auto', display: 'block'});
@@ -470,4 +531,19 @@ Browser.prototype.toggleOptsPopup = function(ev) {
         this.showToolPanel(optsForm);
         this.setUiMode('opts');
     }
+}
+
+function humanReadableScale(x) {
+    var suffix = 'bp';
+    if (x > 1000000000) {
+        x /= 1000000000;
+        suffix = 'Gb';
+    } else if (x > 1000000) {
+        x /= 1000000
+        suffix = 'Mb';
+    } else if (x > 1000) {
+        x /= 1000;
+        suffix = 'kb';
+    }
+    return '' + Math.round(x) + suffix;
 }

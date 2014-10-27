@@ -71,8 +71,7 @@ function Browser(opts) {
     this.maxExtra = 2.5;
     this.minExtra = 0.5;
     this.zoomFactor = 1.0;
-    this.zoomMin = 10.0;
-    // this.zoomMax;       // Allow configuration for compatibility, but otherwise clobber.
+    this.maxPixelsPerBase = 10;
     this.origin = 0;
     this.targetQuantRes = 1.0;
     this.featurePanelWidth = 750;
@@ -226,12 +225,12 @@ Browser.prototype.realInit = function() {
     this.pinnedTierHolder = makeElement('div', null, {className: 'tier-holder tier-holder-pinned'});
     this.tierHolder = makeElement('div', this.makeLoader(24), {className: 'tier-holder tier-holder-rest'});
 
-    this.locSingleBase = makeElement('span', 'foo', {className: 'loc-single-base'});
+    this.locSingleBase = makeElement('span', '', {className: 'loc-single-base'});
     var locSingleBaseHolder = makeElement('div', this.locSingleBase,{className: 'loc-single-base-holder'}); 
     // Add listener to update single base location
     this.addViewListener(function(chr, minFloor, maxFloor, zoomSliderValue, zoomSliderDict, min, max) {
         // Just setting textContent causes layout flickering in Blink.
-        // This approach means that the element is never empty.');
+        // This approach means that the element is never empty.
         var loc = Math.round((max + min) / 2);
         self.locSingleBase.appendChild(document.createTextNode(chr + ':' + formatLongInt(loc)));
         self.locSingleBase.removeChild(self.locSingleBase.firstChild);
@@ -310,7 +309,7 @@ Browser.prototype.realInit2 = function() {
     this.scale = this.featurePanelWidth / (this.viewEnd - this.viewStart);
     if (!this.zoomMax) {
         this.zoomMax = this.zoomExpt * Math.log(this.maxViewWidth / this.zoomBase);
-        this.zoomMin = this.zoomExpt * Math.log(this.featurePanelWidth / 10 / this.zoomBase);
+        this.zoomMin = this.zoomExpt * Math.log(this.featurePanelWidth / this.maxPixelsPerBase / this.zoomBase);
     }
     this.zoomSliderValue = this.zoomExpt * Math.log((this.viewEnd - this.viewStart + 1) / this.zoomBase);
 
@@ -1493,7 +1492,7 @@ Browser.prototype.resizeViewer = function(skipRefresh) {
 
     if (oldFPW != this.featurePanelWidth) {
         this.zoomMax = this.zoomExpt * Math.log(this.maxViewWidth / this.zoomBase);
-        this.zoomMin = this.zoomExpt * Math.log(this.featurePanelWidth / 10 / this.zoomBase);   // FIXME hard-coded minimum.
+        this.zoomMin = this.zoomExpt * Math.log(this.featurePanelWidth / this.maxPixelsPerBase / this.zoomBase);   // FIXME hard-coded minimum.
         this.zoomSliderValue = this.zoomExpt * Math.log((this.viewEnd - this.viewStart + 1) / this.zoomBase);
 
         var viewWidth = this.viewEnd - this.viewStart;
@@ -1799,6 +1798,13 @@ Browser.prototype._setLocation = function(newChr, newMin, newMax, newChrInfo, ca
     if (this.instrumentActivity)
         this.activityStartTime = Date.now()|0;
     return callback();
+}
+
+Browser.prototype.setCenterLocation = function(newChr, newCenterLoc) {
+    var halfWidth = (this.viewEnd - this.viewStart)/2,
+    newMin = newCenterLoc - halfWidth,
+    newMax = newCenterLoc + halfWidth;
+    this.setLocation(newChr, newMin, newMax);
 }
 
 Browser.prototype.pingActivity = function() {

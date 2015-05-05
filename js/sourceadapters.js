@@ -59,6 +59,8 @@ if (typeof(require) !== 'undefined') {
 
     var style = require('./style');
     var StyleFilterSet = style.StyleFilterSet;
+
+    var EncodeFetchable = require('./encode').EncodeFetchable;
 }
 
 var __dalliance_sourceAdapterFactories = {};
@@ -216,6 +218,11 @@ CachingFeatureSource.prototype.addReadinessListener = function(listener) {
         listener(null);
 }
 
+CachingFeatureSource.prototype.removeReadinessListener = function(listener) {
+    if (this.source.removeReadinessListener)
+        return this.source.removeReadinessListener(listener);
+}
+
 CachingFeatureSource.prototype.search = function(query, callback) {
     if (this.source.search)
         return this.source.search(query, callback);
@@ -240,9 +247,20 @@ CachingFeatureSource.prototype.addActivityListener = function(l) {
     }
 }
 
+CachingFeatureSource.prototype.removeActivityListener = function(l) {
+    if (this.source.removeActivityListener) {
+        this.source.removeActivityListener(l);
+    }
+}
+
 CachingFeatureSource.prototype.addChangeListener = function(l) {
     if (this.source.addChangeListener)
         this.source.addChangeListener(l);
+}
+
+CachingFeatureSource.prototype.removeChangeListener = function(l) {
+    if (this.source.removeChangeListener)
+        this.source.removeChangeListener(l);
 }
 
 CachingFeatureSource.prototype.findNextFeature = function(chr, pos, dir, callback) {
@@ -319,6 +337,13 @@ FeatureSourceBase.prototype.addReadinessListener = function(listener) {
     listener(this.readiness);
 }
 
+FeatureSourceBase.prototype.removeReadinessListener = function(listener) {
+    var idx = arrayIndexOf(this.readinessListeners, listener);
+    if (idx >= 0) {
+        this.readinessListeners.splice(idx, 1);
+    }
+}
+
 FeatureSourceBase.prototype.notifyReadiness = function() {
     for (var li = 0; li < this.readinessListeners.length; ++li) {
         try {
@@ -331,6 +356,13 @@ FeatureSourceBase.prototype.notifyReadiness = function() {
 
 FeatureSourceBase.prototype.addActivityListener = function(listener) {
     this.activityListeners.push(listener);
+}
+
+FeatureSourceBase.prototype.removeActivityListener = function(listener) {
+    var idx = arrayIndexOf(this.activityListeners, listener);
+    if (idx >= 0) {
+        this.activityListeners.splice(idx, 1);
+    }
 }
 
 FeatureSourceBase.prototype.notifyActivity = function() {
@@ -372,6 +404,13 @@ function DASFeatureSource(dasSource) {
 DASFeatureSource.prototype.addActivityListener = function(listener) {
     this.activityListeners.push(listener);
 }
+
+DASFeatureSource.prototype.removeActivityListener = function(listener) {
+    var idx = arrayIndexOf(this.activityListeners, listener);
+    if (idx >= 0)
+        this.activityListeners.splice(idx, 1);
+}
+
 
 DASFeatureSource.prototype.notifyActivity = function() {
     for (var li = 0; li < this.activityListeners.length; ++li) {
@@ -599,8 +638,14 @@ BWGFeatureSource.prototype = Object.create(FeatureSourceBase.prototype);
 BWGFeatureSource.prototype.init = function() {
     var thisB = this;
     var arg;
-    if (this.bwgSource.bwgURI) {
-        arg = new URLFetchable(this.bwgSource.bwgURI, {credentials: this.opts.credentials});
+
+    var uri = this.bwgSource.uri || this.bwgSource.bwgURI;
+    if (uri) {
+        if (this.bwgSource.transport === 'encode') {
+            arg = new EncodeFetchable(uri, {credentials: this.opts.credentials});
+        } else {
+            arg = new URLFetchable(uri, {credentials: this.opts.credentials});
+        }
     } else {
         arg = new BlobFetchable(this.bwgSource.bwgBlob);
     }
@@ -836,10 +881,12 @@ BWGFeatureSource.prototype.getStyleSheet = function(callback) {
 function RemoteBWGFeatureSource(bwgSource, worker) {
     FeatureSourceBase.call(this);
 
+    var thisB = this;
     this.worker = worker;
     this.readiness = 'Connecting';
     this.bwgSource = this.opts = bwgSource;
     this.keyHolder = new Awaited();
+
     this.init();
 }
 
@@ -847,7 +894,7 @@ RemoteBWGFeatureSource.prototype = Object.create(FeatureSourceBase.prototype);
 
 RemoteBWGFeatureSource.prototype.init = function() {
     var thisB = this;
-    var uri = this.bwgSource.uri || this.bwgSource.bwgURI;
+    var uri = this.uri || this.bwgSource.uri || this.bwgSource.bwgURI;
     var blob = this.bwgSource.blob || this.bwgSource.bwgBlob;
 
     var cnt = function(key, err) {
@@ -873,7 +920,12 @@ RemoteBWGFeatureSource.prototype.init = function() {
     if (blob) {
         this.worker.postCommand({command: 'connectBBI', blob: blob}, cnt);
     } else {
-        this.worker.postCommand({command: 'connectBBI', uri: resolveUrlToPage(uri), credentials: this.bwgSource.credentials}, cnt); 
+        this.worker.postCommand({
+            command: 'connectBBI', 
+            uri: resolveUrlToPage(uri), 
+            transport: this.bwgSource.transport,
+            credentials: this.bwgSource.credentials}, 
+          cnt); 
     }
 }
 
@@ -1385,6 +1437,12 @@ function MappedFeatureSource(source, mapping) {
 
 MappedFeatureSource.prototype.addActivityListener = function(listener) {
     this.activityListeners.push(listener);
+}
+
+MappedFeatureSource.prototype.removeActivityListener = function(listener) {
+    var idx = arrayIndexOf(this.activityListeners, listener);
+    if (idx >= 0)
+        this.activityListeners.splice(idx, 0);
 }
 
 MappedFeatureSource.prototype.notifyActivity = function() {

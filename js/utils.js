@@ -332,27 +332,45 @@ function saltURL(url) {
 }
 
 function textXHR(url, callback, opts) {
-    if (opts.salt) 
+    if (opts && opts.salt) 
         url = saltURL(url);
 
-    var req = new XMLHttpRequest();
-    req.onreadystatechange = function() {
-    	if (req.readyState == 4) {
-    	    if (req.status >= 300) {
-    		    callback(null, 'Error code ' + req.status);
-    	    } else {
-    		    callback(req.responseText);
-    	    }
-    	}
-    };
-    
-    req.open('GET', url, true);
-    req.responseType = 'text';
+    try {
+        var timeout;
+        if (opts.timeout) {
+            timeout = setTimeout(
+                function() {
+                    console.log('timing out ' + url);
+                    req.abort();
+                    return callback(null, 'Timeout');
+                },
+                opts.timeout
+            );
+        }
 
-    if (opts && opts.credentials) {
-        req.withCredentials = true;
+        var req = new XMLHttpRequest();
+        req.onreadystatechange = function() {
+    	    if (req.readyState == 4) {
+                if (timeout)
+                    clearTimeout(timeout);
+    	        if (req.status < 200 || req.status >= 300) {
+    		    callback(null, 'Error code ' + req.status);
+    	        } else {
+    		    callback(req.responseText);
+    	        }
+    	    }
+        };
+        
+        req.open('GET', url, true);
+        req.responseType = 'text';
+
+        if (opts && opts.credentials) {
+            req.withCredentials = true;
+        }
+        req.send('');
+    } catch (e) {
+        callback(null, 'Exception ' + e);
     }
-    req.send('');
 }
 
 function relativeURL(base, rel) {

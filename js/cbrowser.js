@@ -17,6 +17,7 @@ if (typeof(require) !== 'undefined') {
     var removeChildren = utils.removeChildren;
     var miniJSONify = utils.miniJSONify;
     var shallowCopy = utils.shallowCopy;
+    var textXHR = utils.textXHR;
 
     var tier = require('./tier');
     var DasTier = tier.DasTier;
@@ -36,6 +37,12 @@ if (typeof(require) !== 'undefined') {
     var Chainset = require('./chainset').Chainset;
 
     var Promise = require('es6-promise').Promise;
+
+    var sourcecompare = require('./sourcecompare');
+    var sourcesAreEqual = sourcecompare.sourcesAreEqual;
+    var sourcesAreEqualModuloStyle = sourcecompare.sourcesAreEqualModuloStyle;
+    var sourceDataURI = sourcecompare.sourceDataURI;
+    var sourceStyleURI = sourcecompare.sourceStyleURI;
 }
 
 function Region(chr, min, max) {
@@ -64,7 +71,7 @@ function Browser(opts) {
     this.tierSelectionWrapListeners = [];
 
     this.cookieKey = 'browser';
-    this.registry = 'http://www.dasregistry.org/das/sources';
+
     this.chains = {};
 
     this.pageName = 'svgHolder'
@@ -103,19 +110,17 @@ function Browser(opts) {
     this.tierBackgroundColors = ["rgb(245,245,245)", 'white'];
     this.minTierHeight = 20;
     this.noDefaultLabels = false;
-    this.baseColors = {
-        A: 'green', 
-        C: 'blue', 
-        G: 'orange', 
-        T: 'red',
-        '-' : 'hotpink' // deletion
-    };
 
     // Registry
 
     this.availableSources = new Observed();
     this.defaultSources = [];
     this.mappableSources = {};
+
+    // Central DAS Registry no longer available 2015-05
+
+    this.registry = null; // '//www.dasregistry.org/das/sources';
+    this.noRegistryTabs = true;
 
     this.hubs = [];
     this.hubObjects = [];
@@ -131,13 +136,34 @@ function Browser(opts) {
     this.assemblyNamePrimary = true;
     this.assemblyNameUcsc = true;
 
+    // HTTP warning support
+
+    this.httpCanaryURL = 'http://www.biodalliance.org/http-canary.txt';
+    this.httpWarningURL = '//www.biodalliance.org/https.html';
+
     this.initListeners = [];
+
+    if (opts.baseColors) {
+        this.baseColors = opts.baseColors
+    } else {
+        this.baseColors = {
+            A: 'green',
+            C: 'blue',
+            G: 'orange',
+            T: 'red',
+            '-' : 'hotpink', // deletion
+            'I' : 'red' // insertion
+        };
+    }
 
     if (opts.viewStart !== undefined && typeof(opts.viewStart) !== 'number') {
         throw Error('viewStart must be an integer');
     }
     if (opts.viewEnd !== undefined && typeof(opts.viewEnd) !== 'number') {
         throw Error('viewEnd must be an integer');
+    }
+    if (opts.offscreenInitWidth !== undefined && typeof(opts.offscreenInitWidth) !== 'number') {
+        throw Error('offscreenInitWidth must be an integer');
     }
 
     for (var k in opts) {
@@ -146,10 +172,21 @@ function Browser(opts) {
     if (typeof(opts.uiPrefix) === 'string' && typeof(opts.prefix) !== 'string') {
         this.prefix = opts.uiPrefix;
     }
+    // If the prefix only starts with a single '/' this is relative to the current
+    // site, so we need to prefix the prefix with //{hostname}
+    if (this.prefix.indexOf('//') < 0 && this.prefix.indexOf('/') === 0) {
+        var location = window.location.hostname;
+        if (window.location.port) {
+            location += ':' + window.location.port
+        };
+        this.prefix = '//' + location + this.prefix;
+    }
     if (this.prefix.indexOf('//') === 0) {
-        if (window.location.prototol === 'http:' || window.location.protocol === 'https:') {
+        var proto = window.location.protocol;
+        if (proto == 'http:' || proto == 'https:') {
             // Protocol-relative URLs okay.
         } else {
+            console.log(window.location.protocol);
             console.log('WARNING: prefix is set to a protocol-relative URL (' + this.prefix + ' when loading from a non-HTTP source');
             this.prefix = 'http:' + this.prefix;
         }
@@ -168,12 +205,20 @@ function Browser(opts) {
     if (document.readyState === 'complete') {
         thisB.realInit();
     } else {
-        window.addEventListener('load', function(ev) {thisB.realInit();}, false);
+        var loadListener = function(ev) {
+            window.removeEventListener('load', loadListener, false);
+            thisB.realInit();
+        }
+        window.addEventListener('load', loadListener, false);
     }
 }
 
 Browser.prototype.resolveURL = function(url) {
     return url.replace('$$', this.prefix);
+}
+
+Browser.prototype.destroy = function() {
+    window.removeEventListener('resize', this.resizeListener, false);
 }
 
 Browser.prototype.realInit = function() {
@@ -250,9 +295,10 @@ Browser.prototype.realInit = function() {
     }
     this.browserHolder.appendChild(this.bhtmlRoot);
     
-    window.addEventListener('resize', function(ev) {
+    this.resizeListener = function(ev) {
         thisB.resizeViewer();
-    }, false);
+    };
+    window.addEventListener('resize', this.resizeListener, false);
     this.ruler = makeElement('div', null, {className: 'guideline'})
     this.ruler2 = makeElement('div', null, {className: 'single-base-guideline'});
     this.tierHolderHolder.appendChild(this.ruler);
@@ -285,11 +331,15 @@ Browser.prototype.realInit = function() {
     }, function(v) {
         console.log('Failed to boot workers', v);
     }).then(function() {
-        if (window.getComputedStyle(thisB.browserHolderHolder).display != 'none') {
+        if (self.offscreenInitWidth || (window.getComputedStyle(thisB.browserHolderHolder).display != 'none' &&
+            thisB.tierHolder.getBoundingClientRect().width > 0))
+        {
             setTimeout(function() {thisB.realInit2()}, 1);
         } else {
             var pollInterval = setInterval(function() {
-                if (window.getComputedStyle(thisB.browserHolderHolder).display != 'none') {
+                if (window.getComputedStyle(thisB.browserHolderHolder).display != 'none' &&
+                    thisB.tierHolder.getBoundingClientRect().width > 0)
+                {
                     clearInterval(pollInterval);
                     thisB.realInit2();
                 } 
@@ -305,7 +355,7 @@ Browser.prototype.realInit2 = function() {
     removeChildren(this.tierHolder);
     removeChildren(this.pinnedTierHolder);
 
-    this.featurePanelWidth = this.tierHolder.getBoundingClientRect().width | 0;
+    this.featurePanelWidth = this.tierHolder.getBoundingClientRect().width | thisB.offscreenInitWidth | 0;
     this.scale = this.featurePanelWidth / (this.viewEnd - this.viewStart);
     if (!this.zoomMax) {
         this.zoomMax = this.zoomExpt * Math.log(this.maxViewWidth / this.zoomBase);
@@ -466,7 +516,7 @@ Browser.prototype.realInit2 = function() {
                 thisB.markSelectedTiers();
                 thisB.notifyTierSelection();
                 thisB.reorderTiers();
-                thisB.notifyTier();
+                thisB.notifyTier("selected", st);
             } else {
                 var st = thisB.getSelectedTier();
                 if (st > 0) {
@@ -545,7 +595,7 @@ Browser.prototype.realInit2 = function() {
                 thisB.markSelectedTiers();
                 thisB.notifyTierSelection();
                 thisB.reorderTiers();
-                thisB.notifyTier();
+                thisB.notifyTier("selected", st);
             } else {
                 var st = thisB.getSelectedTier();
                 if (st < thisB.tiers.length -1) {
@@ -657,23 +707,24 @@ Browser.prototype.realInit2 = function() {
         }
 
         if (!source.disabled) {
-            this.makeTier(source, config);
+            this.makeTier(source, config).then(function(tier) {
+                thisB.refreshTier(tier);
+            });
         }
     }
 
     thisB._ensureTiersGrouped();
     thisB.arrangeTiers();
     thisB.reorderTiers();
-    thisB.refresh();
-    thisB.setSelectedTier(1);
-
-    thisB.positionRuler();
 
 
     var ss = this.getSequenceSource();
     if (ss) {
         ss.getSeqInfo(this.chr, function(si) {
-            thisB.currentSeqMax = si.length;
+            if (si)
+                thisB.currentSeqMax = si.length;
+            else
+                thisB.currentSeqMax = -1;
         });
     }
 
@@ -719,14 +770,17 @@ Browser.prototype.realInit2 = function() {
         this.storeStatus();
     }
 
-    // Ping any init listeners.
-    for (var ii = 0; ii < this.initListeners.length; ++ii) {
-        try {
-            this.initListeners[ii].call(this);
-        } catch (e) {
-            console.log(e);
+    thisB.setLocation(this.chr, this.viewStart, this.viewEnd, function () {
+        thisB.setSelectedTier(1);
+        // Ping any init listeners.
+        for (var ii = 0; ii < thisB.initListeners.length; ++ii) {
+            try {
+                thisB.initListeners[ii].call(thisB);
+            } catch (e) {
+                console.log(e);
+            }
         }
-    }
+    });
 }
 
 // 
@@ -1099,7 +1153,7 @@ Browser.prototype.realMakeTier = function(source, config) {
                     break;
                 }
             }
-            thisB.notifyTier();
+            thisB.notifyTier("reordered", tier);
         }
     };
 
@@ -1112,27 +1166,18 @@ Browser.prototype.realMakeTier = function(source, config) {
 
     this.tiers.push(tier);  // NB this currently tells any extant knownSpace about the new tier.
     
-    tier.init(); // fetches stylesheet
-    tier.currentlyHeight = 50;
-    this.updateHeight();
-    tier.updateLabel();
+ // fetches stylesheet
+    return tier.init().then(function (updatedTier) {
+        updatedTier.currentlyHeight = 50;
+        thisB.updateHeight();
+        updatedTier.updateLabel();
 
-    if (tier.featureSource && tier.featureSource.addActivityListener) {
-        tier.featureSource.addActivityListener(function(busy) {
-            if (busy > 0) {
-                tier.loaderButton.style.display = 'inline-block';
-            } else {
-                tier.loaderButton.style.display = 'none';
-            }
-            thisB.pingActivity();
-        });
-    }
+        thisB.withPreservedSelection(thisB._ensureTiersGrouped);
+        updatedTier._updateFromConfig();
+        thisB.reorderTiers();
 
-    this.withPreservedSelection(thisB._ensureTiersGrouped);
-    tier._updateFromConfig();
-    this.reorderTiers();
-
-    return tier;
+        return updatedTier;
+    });
 }
 
 Browser.prototype.reorderTiers = function() {
@@ -1187,9 +1232,10 @@ Browser.prototype.withPreservedSelection = function(f) {
     }
 }
 
-Browser.prototype.refreshTier = function(tier) {
+Browser.prototype.refreshTier = function(tier, tierCallback) {
+    tierCallback = tierCallback || defaultTierRenderer;
     if (this.knownSpace) {
-        this.knownSpace.invalidate(tier);
+        this.knownSpace.invalidate(tier, tierCallback);
     }
 }
 
@@ -1296,6 +1342,19 @@ Browser.prototype.arrangeTiers = function() {
 }
 
 Browser.prototype.refresh = function() {
+
+    this.retrieveTierData(this.tiers, defaultTierRenderer);
+    this.drawOverlays();
+    this.positionRuler();
+
+};
+
+var defaultTierRenderer = function(status, tier) {
+    tier.draw();
+    tier.updateStatus(status);
+}
+
+Browser.prototype.retrieveTierData = function(tiers, tierRendererCallback) {
     this.notifyLocation();
     var width = (this.viewEnd - this.viewStart) + 1;
     var minExtraW = (100.0/this.scale)|0;
@@ -1305,12 +1364,12 @@ Browser.prototype.refresh = function() {
     var oh = newOrigin - this.origin;
     this.origin = newOrigin;
     this.scaleAtLastRedraw = this.scale;
-    for (var t = 0; t < this.tiers.length; ++t) {
+    for (var t = 0; t < tiers.length; ++t) {
         var od = oh;
-        if (this.tiers[t].originHaxx) {
-            od += this.tiers[t].originHaxx;
+        if (tiers[t].originHaxx) {
+            od += tiers[t].originHaxx;
         }
-        this.tiers[t].originHaxx = od;
+        tiers[t].originHaxx = od;
     }
 
     var scaledQuantRes = this.targetQuantRes / this.scale;
@@ -1324,6 +1383,7 @@ Browser.prototype.refresh = function() {
         var ss = this.getSequenceSource();
         if (this.knownSpace)
             this.knownSpace.cancel();
+        // known space is created based on the entire tier list, for future caching purposes, even if only a subset of the tiers are needed to be rendered now.
         this.knownSpace = new KnownSpace(this.tiers, this.chr, outerDrawnStart, outerDrawnEnd, scaledQuantRes, ss);
     }
     
@@ -1335,10 +1395,8 @@ Browser.prototype.refresh = function() {
         this.drawnStart = outerDrawnStart;
         this.drawnEnd = outerDrawnEnd;
     }
-    
-    this.knownSpace.viewFeatures(this.chr, this.drawnStart, this.drawnEnd, scaledQuantRes);
-    this.drawOverlays();
-    this.positionRuler();
+    // send in the subset of tiers to retrieve.
+    this.knownSpace.retrieveFeatures(tiers, this.chr, this.drawnStart, this.drawnEnd, scaledQuantRes, tierRendererCallback);
 }
 
 function setSources(msh, availableSources, maybeMapping) {
@@ -1351,6 +1409,9 @@ function setSources(msh, availableSources, maybeMapping) {
 }
 
 Browser.prototype.queryRegistry = function(maybeMapping, tryCache) {
+    if (!this.registry)
+        return;
+
     var thisB = this;
     var coords, msh;
     if (maybeMapping) {
@@ -1378,8 +1439,14 @@ Browser.prototype.queryRegistry = function(maybeMapping, tryCache) {
             }
         }
     }
-            
-    new DASRegistry(this.registry).sources(function(sources) {
+
+    var rurl = this.registry;
+    if (rurl.indexOf('//') == 0) {
+        var proto = window.location.protocol;
+        if (proto != 'https:' && proto != 'http:')
+            rurl = 'http:' + rurl;
+    }
+    new DASRegistry(rurl).sources(function(sources) {
         var availableSources = [];
         for (var s = 0; s < sources.length; ++s) {
             var source = sources[s];
@@ -1529,91 +1596,19 @@ Browser.prototype.setFullScreenHeight = function() {
 }
 
 Browser.prototype.addTier = function(conf) {
+    var thisB = this;
     conf = shallowCopy(conf);
     conf.disabled = false;
-    
-    var tier = this.makeTier(conf);
-    this.markSelectedTiers();
-    this.positionRuler();
-    this.notifyTier();
-    return tier;
-}
 
-function sourceDataURI(conf) {
-    if (conf.uri) {
-        return conf.uri;
-    } else if (conf.blob) {
-        return 'file:' + conf.blob.name;
-    } else if (conf.bwgBlob) {
-        return 'file:' + conf.bwgBlob.name;
-    } else if (conf.bamBlob) {
-        return 'file:' + conf.bamBlob.name;
-    } else if (conf.twoBitBlob) {
-        return 'file:' + conf.twoBitBlob.name;
-    }
+    return this.makeTier(conf).then(function (tier) {
+        thisB.refreshTier(tier);
+        thisB.markSelectedTiers();
+        thisB.positionRuler();
+        thisB.notifyTier("added", tier);
+        return tier;
+    })
+};
 
-    return conf.bwgURI || conf.bamURI || conf.jbURI || conf.twoBitURI || 'http://www.biodalliance.org/magic/no_uri';
-}
-
-function sourceStyleURI(conf) {
-    if (conf.stylesheet_uri)
-        return conf.stylesheet_uri;
-    else if (conf.tier_type == 'sequence' || conf.twoBitURI || conf.twoBitBlob)
-        return 'http://www.biodalliance.org/magic/sequence'
-    else
-        return sourceDataURI(conf);
-}
-
-function sourcesAreEqualModuloStyle(a, b) {
-    if (sourceDataURI(a) != sourceDataURI(b))
-        return false;
-
-    if (a.mapping != b.mapping)
-        return false;
-
-    if (a.tier_type != b.tier_type)
-        return false;
-
-    if (a.overlay) {
-        if (!b.overlay || b.overlay.length != a.overlay.length)
-            return false;
-        for (var oi = 0; oi < a.overlay.length; ++oi) {
-            if (!sourcesAreEqualModuloStyle(a.overlay[oi], b.overlay[oi]))
-                return false;
-        }
-    } else {
-        if (b.overlay)
-            return false;
-    }
-
-    return true;
-}
-
-function sourcesAreEqual(a, b) {
-    if (sourceDataURI(a) != sourceDataURI(b) ||
-        sourceStyleURI(a) != sourceStyleURI(b))
-        return false;
-
-    if (a.mapping != b.mapping)
-        return false;
-
-    if (a.tier_type != b.tier_type)
-        return false;
-
-    if (a.overlay) {
-        if (!b.overlay || b.overlay.length != a.overlay.length)
-            return false;
-        for (var oi = 0; oi < a.overlay.length; ++oi) {
-            if (!sourcesAreEqual(a.overlay[oi], b.overlay[oi]))
-                return false;
-        }
-    } else {
-        if (b.overlay)
-            return false;
-    }
-
-    return true;
-}
 
 Browser.prototype.removeTier = function(conf, force) {
     var target = -1;
@@ -1634,6 +1629,7 @@ Browser.prototype.removeTier = function(conf, force) {
         throw "Couldn't find requested tier";
     }
 
+    var targetTier = this.tiers[target];
     this.tiers.splice(target, 1);
 
     var nst = [];
@@ -1648,8 +1644,28 @@ Browser.prototype.removeTier = function(conf, force) {
     this.selectedTiers = nst;
     this.markSelectedTiers();
 
+    targetTier.destroy();
+    if (this.knownSpace) {
+        this.knownSpace.featureCache[targetTier] = null;
+    }
+
     this.reorderTiers();
-    this.notifyTier();
+    this.notifyTier("removed", targetTier);
+}
+
+Browser.prototype.removeAllTiers = function() {
+	var thisB = this;
+    this.selectedTiers = [];
+    this.markSelectedTiers();
+    this.tiers.forEach(function (targetTier) {
+        targetTier.destroy();
+        if (thisB.knownSpace) {
+            thisB.knownSpace.featureCache[targetTier] = null;
+        }
+    });
+    this.tiers.length = 0;
+    this.reorderTiers();
+    this.notifyTier("removedAll", null);
 }
 
 Browser.prototype.getSequenceSource = function() {
@@ -1685,6 +1701,14 @@ Browser.prototype.setLocation = function(newChr, newMin, newMax, callback, soft)
         throw Error('maximum must be a number (got ' + JSON.stringify(newMax) + ')');
     }
 
+    if (newMin > newMax) {
+        var oldNewMin = newMin;
+        newMin = newMax;
+        newMax = oldNewMin;
+    } else if (newMin === newMax) {
+        newMax += 1;
+    }
+
     if (!callback) {
         callback = function(err) {
             if (err) {
@@ -1702,17 +1726,20 @@ Browser.prototype.setLocation = function(newChr, newMin, newMax, callback, soft)
             return callback('Need a sequence source');
         }
 
-        ss.getSeqInfo(newChr, function(si) {
+        var findChr = newChr || this.chr;
+        ss.getSeqInfo(findChr, function(si) {
             if (!si) {
                 var altChr;
-                if (newChr.indexOf('chr') == 0) {
-                    altChr = newChr.substr(3);
+                if (findChr.indexOf('chr') == 0) {
+                    altChr = findChr.substr(3);
                 } else {
-                    altChr = 'chr' + newChr;
+                    altChr = 'chr' + findChr;
                 }
                 ss.getSeqInfo(altChr, function(si2) {
-                    if (!si2) {
+                    if (!si2 && newChr) {
                         return callback("Couldn't find sequence '" + newChr + "'");
+                    } else if (!si2) {
+                        return thisB._setLocation(null, newMin, newMax, null, callback, soft);
                     } else {
                         return thisB._setLocation(altChr, newMin, newMax, si2, callback, soft);
                     }
@@ -1741,20 +1768,23 @@ Browser.prototype._setLocation = function(newChr, newMin, newMax, newChrInfo, ca
     var newWidth = Math.max(10, newMax-newMin+1);
 
     if (!soft) {
+        var csm = this.currentSeqMax;
+        if (csm <= 0)
+            csm = 1000000000000;
         if (newMin < 1) {
             newMin = 1; newMax = newMin + newWidth - 1;
         }
-        if (newMax > this.currentSeqMax) {
-            newMax = this.currentSeqMax;
+        if (newMax > csm) {
+            newMax = csm;
             newMin = Math.max(1, newMax - newWidth + 1);
         }
     }
 
     this.viewStart = newMin;
     this.viewEnd = newMax;
-    var newScale = Math.max(this.featurePanelWidth, 50) / (this.viewEnd - this.viewStart);
+    var newScale = Math.max(this.featurePanelWidth || this.offscreenInitWidth, 50) / (this.viewEnd - this.viewStart);
     var oldScale = this.scale;
-    var scaleChanged = (Math.abs(newScale - oldScale)) > 0.0001;
+    var scaleChanged = (Math.abs(newScale - oldScale)) > 0.000001;
     this.scale = newScale;
 
     var newZS, oldZS;
@@ -1833,6 +1863,13 @@ Browser.prototype.addFeatureListener = function(handler, opts) {
     this.featureListeners.push(handler);
 }
 
+Browser.prototype.removeFeatureListener = function(handler, opts) {
+    var idx = arrayIndexOf(this.featureListeners, handler);
+    if (idx >= 0) {
+        this.featureListeners.splice(idx, 1);
+    }
+}
+
 Browser.prototype.notifyFeature = function(ev, feature, hit, tier) {
   for (var fli = 0; fli < this.featureListeners.length; ++fli) {
       try {
@@ -1849,6 +1886,13 @@ Browser.prototype.addFeatureHoverListener = function(handler, opts) {
     this.featureHoverListeners.push(handler);
 }
 
+Browser.prototype.removeFeatureHoverListener = function(handler, opts) {
+    var idx = arrayIndexOf(this.featureHoverListeners, handler);
+    if (idx >= 0) {
+        this.featureHoverListeners.splice(idx, 1);
+    }
+}
+
 Browser.prototype.notifyFeatureHover = function(ev, feature, hit, tier) {
     for (var fli = 0; fli < this.featureHoverListeners.length; ++fli) {
         try {
@@ -1862,6 +1906,13 @@ Browser.prototype.notifyFeatureHover = function(ev, feature, hit, tier) {
 Browser.prototype.addViewListener = function(handler, opts) {
     opts = opts || {};
     this.viewListeners.push(handler);
+}
+
+Browser.prototype.removeViewListener = function(handler, opts) {
+    var idx = arrayIndexOf(this.viewListeners, handler);
+    if (idx >= 0) {
+        this.viewListeners.splice(idx, 1);
+    }
 }
 
 Browser.prototype.notifyLocation = function() {
@@ -1894,10 +1945,17 @@ Browser.prototype.addTierListener = function(handler) {
     this.tierListeners.push(handler);
 }
 
-Browser.prototype.notifyTier = function() {
+Browser.prototype.removeTierListener = function(handler) {
+    var idx = arrayIndexOf(this.tierListeners, handler);
+    if (idx >= 0) {
+        this.tierListeners.splice(idx, 1);
+    }
+}
+
+Browser.prototype.notifyTier = function(status, tier) {
     for (var tli = 0; tli < this.tierListeners.length; ++tli) {
         try {
-            this.tierListeners[tli]();
+            this.tierListeners[tli](status, tier);
         } catch (ex) {
             console.log(ex.stack);
         }
@@ -1906,6 +1964,13 @@ Browser.prototype.notifyTier = function() {
 
 Browser.prototype.addRegionSelectListener = function(handler) {
     this.regionSelectListeners.push(handler);
+}
+
+Browser.prototype.removeRegionSelectListener = function(handler) {
+    var idx = arrayIndexOf(this.regionSelectListeners, handler);
+    if (idx >= 0) {
+        this.regionSelectListeners.splice(idx, 1);
+    }
 }
 
 Browser.prototype.notifyRegionSelect = function(chr, min, max) {
@@ -2034,8 +2099,15 @@ Browser.prototype.markSelectedTiers = function() {
     }
 }
 
-Browser.prototype.addTierSelectionListener = function(f) {
-    this.tierSelectionListeners.push(f);
+Browser.prototype.addTierSelectionListener = function(handler) {
+    this.tierSelectionListeners.push(handler);
+}
+
+Browser.prototype.removeTierSelectionListener = function(handler) {
+    var idx = arrayIndexOf(this.tierSelectionListeners, handler);
+    if (idx >= 0) {
+        this.tierSelectionListeners.splice(idx, 1);
+    }
 }
 
 Browser.prototype.notifyTierSelection = function() {
@@ -2046,10 +2118,18 @@ Browser.prototype.notifyTierSelection = function() {
             console.log(ex.stack);
         }
     }
+
 }
 
 Browser.prototype.addTierSelectionWrapListener = function(f) {
     this.tierSelectionWrapListeners.push(f);
+}
+
+Browser.prototype.removeTierSelectionWrapListener = function(handler) {
+    var idx = arrayIndexOf(this.tierSelectionWrapListeners, handler);
+    if (idx >= 0) {
+        this.tierSelectionWrapListeners.splice(idx, 1);
+    }
 }
 
 Browser.prototype.notifyTierSelectionWrap = function(i) {
@@ -2323,6 +2403,42 @@ Browser.prototype.makeLoader = function(size) {
     }
 }
 
+Browser.prototype.canFetchPlainHTTP = function() {
+    var self = this;
+    if (!this._plainHTTPPromise) {
+        var worker = this.getWorker();
+        if (worker) {
+            this._plainHTTPPromise = new Promise(function(resolve, reject) {
+                worker.postCommand(
+                    {command: 'textxhr',
+                     uri: self.httpCanaryURL},
+                    function(result, err) {
+                        if (result) {
+                            resolve(true);
+                        } else {
+                            resolve(false);
+                        }
+                    });
+                });
+        } else {
+           this._plainHTTPPromise = new Promise(function(resolve, reject) {
+                textXHR(
+                    self.httpCanaryURL,
+                    function(result, err) {
+                        if (result) {
+                            resolve(true);
+                        } else {
+                            resolve(false);
+                        }
+                    },
+                    {timeout: 2000}
+                );
+            });
+        }
+    }
+    return this._plainHTTPPromise;
+}
+
 Browser.prototype.getWorker = function() {
     if (!this.useFetchWorkers || !this.fetchWorkers || this.fetchWorkers.length==0)
         return null;
@@ -2351,13 +2467,14 @@ function FetchWorker(browser, worker) {
 function makeFetchWorker(browser) {
     var wurl = browser.resolveURL(browser.workerPath);
     if (wurl.indexOf('//') == 0) {
-        if (window.location.prototype === 'https:')
+        var proto = window.location.protocol;
+        if (proto == 'https:')
             wurl = 'https:' + wurl;
         else
             wurl = 'http:' + wurl;
     }
 
-    var wscript = 'importScripts("' + wurl + '");';
+    var wscript = 'importScripts("' + wurl + '?version=' + VERSION + '");';
     var wblob = new Blob([wscript], {type: 'application/javascript'});
 
 
@@ -2387,9 +2504,7 @@ FetchWorker.prototype.postCommand = function(cmd, callback, transfer) {
 
 if (typeof(module) !== 'undefined') {
     module.exports = {
-        Browser: Browser,
-        sourcesAreEqual: sourcesAreEqual,
-        sourceDataURI: sourceDataURI
+        Browser: Browser
     };
 
     // Required because they add stuff to Browser.prototype

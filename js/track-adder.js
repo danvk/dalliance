@@ -12,7 +12,9 @@
 if (typeof(require) !== 'undefined') {
     var browser = require('./cbrowser');
     var Browser = browser.Browser;
-    var sourcesAreEqual = browser.sourcesAreEqual;
+
+    var sc = require('./sourcecompare');
+    var sourcesAreEqual = sc.sourcesAreEqual;
 
     var utils = require('./utils');
     var makeElement = utils.makeElement;
@@ -50,6 +52,8 @@ if (typeof(require) !== 'undefined') {
     var DASSegment = das.DASSegment;
     var DASRegistry = das.DASRegistry;
     var coordsMatch = das.coordsMatch;
+
+    var EncodeFetchable = require('./encode').EncodeFetchable;
 }
 
 Browser.prototype.currentlyActive = function(source) {
@@ -715,7 +719,14 @@ Browser.prototype.showTrackAdder = function(ev) {
                     if (!/^.+:\/\//.exec(curi)) {
                         curi = 'http://' + curi;
                     }
-                    tryAddBin({uri: curi});
+                    var source = {uri: curi};
+                    var lcuri = curi.toLowerCase();
+                    if (lcuri.indexOf("https://www.encodeproject.org/") == 0 &&
+                        lcuri.indexOf("@@download") >= 0) 
+                    {
+                        source.transport = 'encode';
+                    }
+                    tryAddBin(source);
                 }
             } else if (customMode === 'reset') {
                 switchToCustomMode();
@@ -994,6 +1005,9 @@ Browser.prototype.showTrackAdder = function(ev) {
         if (s.mapping && s.mapping != '__default__')
             nds.mapping = s.mapping;
 
+        if (s.transport)
+            nds.transport = s.transport;
+
         if (s.tier_type == 'bwg') {
             if (s.blob)
                 nds.bwgBlob = s.blob;
@@ -1035,8 +1049,27 @@ Browser.prototype.showTrackAdder = function(ev) {
         probeResource(source, function(source, err) {
             if (err) {
                 removeChildren(stabHolder);
-                stabHolder.appendChild(makeElement('h2', "Couldn't access custom data"));
-                stabHolder.appendChild(makeElement('p', '' + err));
+                var tabError = makeElement('div');
+                tabError.appendChild(makeElement('h2', "Couldn't access custom data"));
+                tabError.appendChild(makeElement('p', '' + err));
+                stabHolder.appendChild(tabError);
+                console.log(source);
+                if (window.location.protocol === 'https:' && source.uri.indexOf('http:') == 0) {
+                    thisB.canFetchPlainHTTP().then(
+                        function(can) {
+                            if (!can) {
+                                tabError.appendChild(
+                                    makeElement('p', [
+                                        makeElement('strong', 'HTTP warning: '),
+                                        'you may not be able to access HTTP resources from an instance of Biodalliance which you are accessing via HTTPS.',
+                                        makeElement('a', '[More info]', {href: thisB.httpWarningURL, target: "_blank"})
+                                      ]
+                                   )
+                                );
+                            }
+                        }
+                    );
+                }
                 customMode = 'reset-bin';
             } else {
                 var nds = makeSourceConfig(source);
@@ -1085,11 +1118,13 @@ Browser.prototype.showTrackAdder = function(ev) {
 
     function completeBAM(nds) {
         var indexF;
-        if (nds.baiBlob) {
+        if (nds.baiBlob) 
             indexF = new BlobFetchable(nds.baiBlob);
-        } else {
-            indexF = new URLFetchable(nds.bamURI + '.bai');
-        }
+        else if (nds.transport == 'encode')
+            indexF = new EncodeFetchable(nds.bamURI + '.bai');
+        else
+            indexF = new URLFetchable(nds.bamURI + '.bai', {credentials: nds.credentials});
+
         indexF.slice(0, 256).fetch(function(r) {
                 var hasBAI = false;
                 if (r) {

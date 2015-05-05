@@ -109,35 +109,39 @@ var seed=0;
 var isSafari = navigator.userAgent.indexOf('Safari') >= 0 && navigator.userAgent.indexOf('Chrome') < 0 ;
 
 URLFetchable.prototype.fetchAsText = function(callback) {
-    var req = new XMLHttpRequest();
-    var length;
-    var url = this.url;
-    if (isSafari || this.opts.salt) {
-        url = url + '?salt=' + b64_sha1('' + Date.now() + ',' + (++seed));
-    }
-    req.open('GET', url, true);
-
-    if (this.end) {
-        if (this.end - this.start > 100000000) {
-            throw 'Monster fetch!';
+    try {
+        var req = new XMLHttpRequest();
+        var length;
+        var url = this.url;
+        if ((isSafari || this.opts.salt) && url.indexOf('?') < 0) {
+            url = url + '?salt=' + b64_sha1('' + Date.now() + ',' + (++seed));
         }
-        req.setRequestHeader('Range', 'bytes=' + this.start + '-' + this.end);
-        length = this.end - this.start + 1;
-    }
+        req.open('GET', url, true);
 
-    req.onreadystatechange = function() {
-        if (req.readyState == 4) {
-            if (req.status == 200 || req.status == 206) {
-                return callback(req.responseText);
-            } else {
-                return callback(null);
+        if (this.end) {
+            if (this.end - this.start > 100000000) {
+                throw 'Monster fetch!';
             }
+            req.setRequestHeader('Range', 'bytes=' + this.start + '-' + this.end);
+            length = this.end - this.start + 1;
         }
-    };
-    if (this.opts.credentials) {
-        req.withCredentials = true;
+
+        req.onreadystatechange = function() {
+            if (req.readyState == 4) {
+                if (req.status == 200 || req.status == 206) {
+                    return callback(req.responseText);
+                } else {
+                    return callback(null);
+                }
+            }
+        };
+        if (this.opts.credentials) {
+            req.withCredentials = true;
+        }
+        req.send('');
+    } catch (e) {
+        return callback(null);
     }
-    req.send('');
 }
 
 URLFetchable.prototype.salted = function() {
@@ -146,59 +150,79 @@ URLFetchable.prototype.salted = function() {
     return new URLFetchable(this.url, this.start, this.end, o);
 }
 
-URLFetchable.prototype.fetch = function(callback, attempt, truncatedLength) {
+URLFetchable.prototype.fetch = function(callback, opts) {
     var thisB = this;
-
-    attempt = attempt || 1;
+ 
+    opts = opts || {};
+    var attempt = opts.attempt || 1;
+    var truncatedLength = opts.truncatedLength;
     if (attempt > 3) {
         return callback(null);
     }
 
-    var req = new XMLHttpRequest();
-    var length;
-    var url = this.url;
-    if (isSafari || this.opts.salt) {
-        url = url + '?salt=' + b64_sha1('' + Date.now() + ',' + (++seed));
-    }
-    req.open('GET', url, true);
-    req.overrideMimeType('text/plain; charset=x-user-defined');
-    if (this.end) {
-        if (this.end - this.start > 100000000) {
-            throw 'Monster fetch!';
+    try {
+        var timeout;
+        if (opts.timeout && !this.opts.credentials) {
+            timeout = setTimeout(
+                function() {
+                    console.log('timing out ' + url);
+                    req.abort();
+                    return callback(null, 'Timeout');
+                },
+                opts.timeout
+            );
         }
-        req.setRequestHeader('Range', 'bytes=' + this.start + '-' + this.end);
-        length = this.end - this.start + 1;
-    }
-    req.responseType = 'arraybuffer';
-    req.onreadystatechange = function() {
-        if (req.readyState == 4) {
-            if (req.status == 200 || req.status == 206) {
-                if (req.response) {
-                    var bl = req.response.byteLength;
-                    if (length && length != bl && (!truncatedLength || bl != truncatedLength)) {
-                        return thisB.fetch(callback, attempt + 1, bl);
-                    } else {
-                        return callback(req.response);
-                    }
-                } else if (req.mozResponseArrayBuffer) {
-                    return callback(req.mozResponseArrayBuffer);
-                } else {
-                    var r = req.responseText;
-                    if (length && length != r.length && (!truncatedLength || r.length != truncatedLength)) {
-                        return thisB.fetch(callback, attempt + 1, r.length);
-                    } else {
-                        return callback(bstringToBuffer(req.responseText));
-                    }
-                }
-            } else {
-                return thisB.fetch(callback, attempt + 1);
+
+        var req = new XMLHttpRequest();
+        var length;
+        var url = this.url;
+        if ((isSafari || this.opts.salt) && url.indexOf('?') < 0) {
+            url = url + '?salt=' + b64_sha1('' + Date.now() + ',' + (++seed));
+        }
+        req.open('GET', url, true);
+        req.overrideMimeType('text/plain; charset=x-user-defined');
+        if (this.end) {
+            if (this.end - this.start > 100000000) {
+                throw 'Monster fetch!';
             }
+            req.setRequestHeader('Range', 'bytes=' + this.start + '-' + this.end);
+            length = this.end - this.start + 1;
         }
-    };
-    if (this.opts.credentials) {
-        req.withCredentials = true;
+        req.responseType = 'arraybuffer';
+        req.onreadystatechange = function() {
+            if (req.readyState == 4) {
+                if (timeout)
+                    clearTimeout(timeout);
+                if (req.status == 200 || req.status == 206) {
+                    if (req.response) {
+                        var bl = req.response.byteLength;
+                        if (length && length != bl && (!truncatedLength || bl != truncatedLength)) {
+                            return thisB.fetch(callback, {attempt: attempt + 1, truncatedLength: bl});
+                        } else {
+                            return callback(req.response);
+                        }
+                    } else if (req.mozResponseArrayBuffer) {
+                        return callback(req.mozResponseArrayBuffer);
+                    } else {
+                        var r = req.responseText;
+                        if (length && length != r.length && (!truncatedLength || r.length != truncatedLength)) {
+                            return thisB.fetch(callback, {attempt: attempt + 1, truncatedLength: r.length});
+                        } else {
+                            return callback(bstringToBuffer(req.responseText));
+                        }
+                    }
+                } else {
+                    return thisB.fetch(callback, {attempt: attempt + 1});
+                }
+            }
+        };
+        if (this.opts.credentials) {
+            req.withCredentials = true;
+        }
+        req.send('');
+    } catch (e) {
+        return callback(null);
     }
-    req.send('');
 }
 
 function bstringToBuffer(result) {

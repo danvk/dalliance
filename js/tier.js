@@ -12,9 +12,11 @@
 if (typeof(require) !== 'undefined') {
     var utils = require('./utils');
     var makeElement = utils.makeElement;
+    var removeChildren = utils.removeChildren;
     var shallowCopy = utils.shallowCopy;
     var pushnew = utils.pushnew;
     var miniJSONify = utils.miniJSONify;
+    var arrayIndexOf = utils.arrayIndexOf;
 
     var das = require('./das');
     var DASStylesheet = das.DASStylesheet;
@@ -26,6 +28,13 @@ if (typeof(require) !== 'undefined') {
     var style = require('./style');
     var StyleFilter = style.StyleFilter;
     var StyleFilterSet = style.StyleFilterSet;
+
+    var sc = require('./sourcecompare');
+    var sourceDataURI = sc.sourceDataURI;
+
+    var Promise = require('es6-promise').Promise;
+
+    var sortFeatures = require('./features').sortFeatures;
 }
 
 var __tier_idSeed = 0;
@@ -128,13 +137,35 @@ function DasTier(browser, source, config, background)
     }
 
     if (this.featureSource && this.featureSource.addReadinessListener) {
-        this.featureSource.addReadinessListener(function(ready) {
+        this.readinessListener = function(ready) {
             thisB.notify(ready, -1);
-        });
+        };
+        this.featureSource.addReadinessListener(this.readinessListener);
+    }
+
+    if (this.featureSource && this.featureSource.addActivityListener) {
+        this.activityListener = function(busy) {
+            if (busy > 0) {
+                thisB.loaderButton.style.display = 'inline-block';
+            } else {
+                thisB.loaderButton.style.display = 'none';
+            }
+            thisB.browser.pingActivity();
+        };
+        this.featureSource.addActivityListener(this.activityListener);
     }
 
     this.listeners = [];
     this.featuresLoadedListeners = [];
+}
+
+DasTier.prototype.destroy = function() {
+    if (this.featureSource.removeReadinessListener) {
+        this.featureSource.removeReadinessListener(this.readinessListener);
+    }
+    if (this.featureSource.removeActivityListener) {
+        this.featureSource.removeActivityListener(this.activityListener);
+    }
 }
 
 DasTier.prototype.setBackground = function(b) {
@@ -154,35 +185,36 @@ DasTier.prototype.addFeatureInfoPlugin = function(p) {
 
 DasTier.prototype.init = function() {
     var tier = this;
-
-    if (tier.dasSource.style) {
-        this.setStylesheet({styles: tier.dasSource.style});
-        this.browser.refreshTier(this);
-    } else {
-        tier.status = 'Fetching stylesheet';
-        tier.fetchStylesheet(function(ss, err) {
-            if (err || !ss) {
-                tier.error = 'No stylesheet';
-                var ss = new DASStylesheet();
-                var defStyle = new DASStyle();
-                defStyle.glyph = 'BOX';
-                defStyle.BGCOLOR = 'blue';
-                defStyle.FGCOLOR = 'black';
-                ss.pushStyle({type: 'default'}, null, defStyle);
-                tier.setStylesheet(ss);
-                tier.browser.refreshTier(tier);
-            } else {
-                tier.setStylesheet(ss);
-                if (ss.geneHint) {
-                    tier.dasSource.collapseSuperGroups = true;
-                    tier.bumped = false;
-                    tier.updateLabel();
+    return new Promise(function (resolve, reject) {
+        
+        if (tier.dasSource.style) {
+            tier.setStylesheet({styles: tier.dasSource.style});
+            resolve(tier);
+        } else {
+            tier.status = 'Fetching stylesheet';
+            tier.fetchStylesheet(function(ss, err) {
+                if (err || !ss) {
+                    tier.error = 'No stylesheet';
+                    var ss = new DASStylesheet();
+                    var defStyle = new DASStyle();
+                    defStyle.glyph = 'BOX';
+                    defStyle.BGCOLOR = 'blue';
+                    defStyle.FGCOLOR = 'black';
+                    ss.pushStyle({type: 'default'}, null, defStyle);
+                    tier.setStylesheet(ss);
+                } else {
+                    tier.setStylesheet(ss);
+                    if (ss.geneHint) {
+                        tier.dasSource.collapseSuperGroups = true;
+                        tier.bumped = false;
+                        tier.updateLabel();
+                    }
+                    tier._updateFromConfig();
                 }
-                tier._updateFromConfig();
-                tier.browser.refreshTier(tier);
-            }
-        });
-    }
+                resolve(tier);
+            });
+        }
+    });
 }
 
 DasTier.prototype.setStylesheet = function(ss) {
@@ -233,20 +265,18 @@ DasTier.prototype.needsSequence = function(scale ) {
     return false;
 }
 
-DasTier.prototype.viewFeatures = function(chr, coverage, scale, features, sequence) {
+DasTier.prototype.setFeatures = function(chr, coverage, scale, features, sequence) {
     this.currentFeatures = features;
-    this.currentSequence = sequence;
-    this.notifyFeaturesLoaded();
-    
+    this.currentSequence = sequence;    
     this.knownChr = chr;
     this.knownCoverage = coverage;
+    
 
-    if (this.status) {
-        this.status = null;
-        this._notifierToStatus();
+    // only notify features loaded, if they are valid
+    if (features) {
+        sortFeatures(this);
+        this.notifyFeaturesLoaded();
     }
-
-    this.draw();
 }
 
 DasTier.prototype.draw = function() {
@@ -406,9 +436,22 @@ DasTier.prototype.drawOverlay = function() {
 
 
 DasTier.prototype.updateStatus = function(status) {
+    var self = this;
     if (status) {
         this.status = status;
         this._notifierToStatus();
+        var sd = sourceDataURI(this.dasSource);
+        if (window.location.protocol === 'https:' && sourceDataURI(this.dasSource).indexOf('http:') == 0 && !this.checkedHTTP) {
+            this.checkedHTTP = true;
+            this.browser.canFetchPlainHTTP().then(
+                function(can) {
+                    if (!can) {
+                        self.warnHTTP = true;
+                        self._notifierToStatus();
+                    }
+                }
+            );
+        }
     } else {
         if (this.status) {
             this.status = null
@@ -439,8 +482,19 @@ DasTier.prototype.notify = function(message, timeout) {
     }
 }
 
-DasTier.prototype._notifierOn = function(message) {
-    this.notifier.textContent = message;
+DasTier.prototype._notifierOn = function(message, warnHTTP) {
+    removeChildren(this.notifier);
+    if (warnHTTP) {
+        this.notifier.appendChild(
+            makeElement(
+                'span',
+                [makeElement('a', '[HTTP Warning] ', {href: this.browser.httpWarningURL, target: "_blank"}),
+                 message]
+            )
+        );
+    } else {
+        this.notifier.textContent = message;
+    }
     this.notifier.style.opacity = 0.8;
 }
 
@@ -450,7 +504,7 @@ DasTier.prototype._notifierOff = function() {
 
 DasTier.prototype._notifierToStatus = function() {
     if (this.status) {
-        this._notifierOn(this.status)
+        this._notifierOn(this.status, this.warnHTTP)
     } else {
         this._notifierOff();
     }
@@ -581,10 +635,20 @@ DasTier.prototype.scheduleRedraw = function() {
         }, 10);
     }
 }
+DasTier.prototype.clearTierListeners = function() {
+	this.listeners = [];
+}
 
 
 DasTier.prototype.addTierListener = function(l) {
     this.listeners.push(l);
+}
+
+DasTier.prototype.removeTierListener = function(l) {
+    var idx = arrayIndexOf(this.listeners, l);
+    if (idx >= 0) {
+        this.listeners.splice(idx, 1);
+    }
 }
 
 DasTier.prototype.notifyTierListeners = function(change) {
@@ -598,9 +662,21 @@ DasTier.prototype.notifyTierListeners = function(change) {
     this.browser.notifyTier();
 }
 
+DasTier.prototype.clearFeaturesLoadedListeners = function() {
+  this.featuresLoadedListeners = [];
+}
+
 DasTier.prototype.addFeaturesLoadedListener = function(handler) {
     this.featuresLoadedListeners.push(handler);
 }
+
+DasTier.prototype.removeFeaturesLoadedListener = function(handler) {
+    var idx = arrayIndexOf(this.featuresLoadedListeners, handler);
+    if (idx >= 0) {
+        this.featuresLoadedListeners.splice(idx, 1);
+    }
+}
+
 
 DasTier.prototype.notifyFeaturesLoaded = function() {
     for (var li = 0; li < this.featuresLoadedListeners.length; ++li) {

@@ -766,9 +766,11 @@ function makeBwg(data, callback, name) {
         } else if (magic == BIG_BED_MAGIC) {
             bwg.type = 'bigbed';
         } else if (magic == BIG_WIG_MAGIC_BE || magic == BIG_BED_MAGIC_BE) {
-            callback(null, "Currently don't support big-endian BBI files");
+            return callback(null, "Currently don't support big-endian BBI files");
+            
         } else {
-            callback(null, "Not a supported format, magic=0x" + magic.toString(16));
+            return callback(null, "Not a supported format, magic=0x" + magic.toString(16));
+            
         }
 
         bwg.version = sa[2];             // 4
@@ -797,7 +799,8 @@ function makeBwg(data, callback, name) {
                 return callback(bwg);
             });
         });
-    });
+    }, {timeout: 5000});    // Potential timeout on first request to catch mixed-content errors on
+                            // Chromium.
 }
 
 
